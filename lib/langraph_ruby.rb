@@ -17,6 +17,22 @@ module LangraphRuby
   class InvalidStateError < Error; end
   class MaxStepsReachedError < Error; end
 
+  # Raised by nodes to pause execution for human input
+  class GraphInterrupt < Error
+    attr_reader :value
+
+    def initialize(value = nil)
+      @value = value
+      super("Graph interrupted")
+    end
+  end
+
   START = :__start__
   END_ = :__end__
+
+  # Convenience method for nodes to trigger an interrupt
+  # When resumed, returns the value provided by the human
+  def self.interrupt(value = nil)
+    raise GraphInterrupt.new(value)
+  end
 end
