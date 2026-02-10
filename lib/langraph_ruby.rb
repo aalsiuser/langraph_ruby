@@ -4,7 +4,9 @@ require "zeitwerk"
 
 loader = Zeitwerk::Loader.for_gem
 loader.inflector.inflect(
-  "ai_message" => "AIMessage"
+  "ai_message" => "AIMessage",
+  "openai_adapter" => "OpenAiAdapter",
+  "ruby_llm_adapter" => "RubyLlmAdapter"
 )
 loader.setup
 
