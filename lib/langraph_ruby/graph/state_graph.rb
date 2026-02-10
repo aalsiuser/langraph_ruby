@@ -3,17 +3,18 @@
 module LangraphRuby
   module Graph
     class StateGraph
-      attr_reader :schema, :nodes, :edges, :conditional_edges
+      attr_reader :schema, :nodes, :edges, :conditional_edges, :retry_policies
 
       def initialize(schema = nil, &block)
         @schema = schema
         @nodes = {}
         @edges = {}
         @conditional_edges = {}
+        @retry_policies = {}
         instance_eval(&block) if block_given?
       end
 
-      def add_node(name, callable = nil, &block)
+      def add_node(name, callable = nil, retry_policy: nil, &block)
         name = name.to_sym
         raise GraphCompilationError, "Node '#{name}' already exists" if @nodes.key?(name)
         raise GraphCompilationError, "Node name '#{name}' is reserved" if reserved_name?(name)
@@ -23,6 +24,7 @@ module LangraphRuby
         raise ArgumentError, "Node function must respond to #call" unless func.respond_to?(:call)
 
         @nodes[name] = func
+        @retry_policies[name] = retry_policy if retry_policy
         self
       end
 
@@ -66,8 +68,8 @@ module LangraphRuby
       end
 
       # DSL-style helpers for block-based construction
-      def node(name, callable = nil, &block)
-        add_node(name, callable, &block)
+      def node(name, callable = nil, retry_policy: nil, &block)
+        add_node(name, callable, retry_policy: retry_policy, &block)
       end
 
       def edge(source_target_hash)
@@ -103,61 +105,11 @@ module LangraphRuby
         start_edges = @edges[LangraphRuby::START] || @conditional_edges[LangraphRuby::START]
         raise GraphCompilationError, "Graph must have an edge from START" unless start_edges
 
-        # Every node must have at least one outgoing edge (except those going to END)
-        @nodes.each_key do |name|
-          has_edge = @edges.key?(name) || @conditional_edges.key?(name)
-          raise GraphCompilationError, "Node '#{name}' has no outgoing edge" unless has_edge
-        end
-
-        # Check for unreachable nodes
-        reachable = compute_reachable_nodes
-        @nodes.each_key do |name|
-          unless reachable.include?(name)
-            raise GraphCompilationError, "Node '#{name}' is unreachable from START"
-          end
-        end
+        # Note: We don't require every node to have outgoing edges or be statically
+        # reachable from START, because Send-targeted nodes are invoked dynamically
+        # at runtime. The execution engine defaults to END_ for nodes without edges.
       end
 
-      def compute_reachable_nodes
-        reachable = Set.new
-        queue = [LangraphRuby::START]
-
-        while (current = queue.shift)
-          next if current == LangraphRuby::END_
-
-          # Direct edges
-          if @edges[current]
-            target = @edges[current]
-            unless target == LangraphRuby::END_ || reachable.include?(target)
-              reachable << target
-              queue << target
-            end
-          end
-
-          # Conditional edges
-          if @conditional_edges[current]
-            cond = @conditional_edges[current]
-            if cond[:mapping]
-              cond[:mapping].each_value do |target|
-                unless target == LangraphRuby::END_ || reachable.include?(target)
-                  reachable << target
-                  queue << target
-                end
-              end
-            else
-              # Without explicit mapping, assume all nodes are potentially reachable
-              @nodes.each_key do |name|
-                unless reachable.include?(name)
-                  reachable << name
-                  queue << name
-                end
-              end
-            end
-          end
-        end
-
-        reachable
-      end
     end
   end
 end

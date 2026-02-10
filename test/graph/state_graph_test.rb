@@ -73,13 +73,10 @@ class StateGraphTest < Minitest::Test
     assert_raises(LangraphRuby::GraphCompilationError) { g.compile }
   end
 
-  def test_compile_validates_orphan_node
+  def test_compile_validates_no_start_edge
     g = LangraphRuby::Graph::StateGraph.new
     g.add_node(:a, ->(s) { s })
-    g.add_node(:orphan, ->(s) { s })
-    g.add_edge(LangraphRuby::START, :a)
     g.add_edge(:a, LangraphRuby::END_)
-    g.add_edge(:orphan, LangraphRuby::END_)
     assert_raises(LangraphRuby::GraphCompilationError) { g.compile }
   end
 

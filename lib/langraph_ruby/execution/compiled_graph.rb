@@ -46,19 +46,18 @@ module LangraphRuby
               return build_interrupt_result(state, node_name, step, :before)
             end
 
-            update = execute_node_with_interrupt(node_fn, state, node_name, step, thread_id)
-            return update if update.is_a?(InterruptResult)
+            result = execute_node_with_retry(node_fn, state, node_name, step, thread_id)
+            return result if result.is_a?(InterruptResult)
 
-            state = apply_state_update(state, update) if update.is_a?(Hash)
+            # Handle different return types
+            state, resolved = process_node_result(result, state, node_name)
 
             # interrupt_after check
             if @interrupt_after.include?(node_name)
-              resolved = resolve_next_nodes(node_name, state)
               save_interrupt_checkpoint(thread_id, state, node_name, step, :after, resolved)
               return build_interrupt_result(state, node_name, step, :after)
             end
 
-            resolved = resolve_next_nodes(node_name, state)
             next_nodes.concat(resolved)
           end
 
@@ -94,14 +93,12 @@ module LangraphRuby
               node_fn = @graph.nodes[node_name]
               raise GraphExecutionError, "Node '#{node_name}' not found" unless node_fn
 
-              update = execute_node(node_fn, state)
+              result = execute_node(node_fn, state)
+              state, _resolved = process_node_result(result, state, node_name)
 
-              if update.is_a?(Hash)
-                state = apply_state_update(state, update)
-
-                if stream_mode == :updates
-                  yielder << { node: node_name, update: update, step: step }
-                end
+              update = result.is_a?(Command) ? result.update : result
+              if update.is_a?(Hash) && stream_mode == :updates
+                yielder << { node: node_name, update: update, step: step }
               end
             end
 
@@ -234,14 +231,59 @@ module LangraphRuby
         [state, next_nodes, step]
       end
 
-      def execute_node_with_interrupt(node_fn, state, node_name, step, thread_id)
-        node_fn.call(state)
+      def execute_node_with_retry(node_fn, state, node_name, step, thread_id)
+        retry_policy = @graph.respond_to?(:retry_policies) && @graph.retry_policies[node_name]
+
+        executor = -> {
+          node_fn.call(state)
+        }
+
+        result = if retry_policy
+                   retry_policy.execute(&executor)
+                 else
+                   executor.call
+                 end
+
+        result
       rescue GraphInterrupt => e
-        # Dynamic interrupt from within a node
         save_interrupt_checkpoint(thread_id, state, node_name, step, :dynamic, [], e.value)
         build_interrupt_result(state, node_name, step, :dynamic, e.value)
       rescue StandardError => e
         raise GraphExecutionError, "Node execution failed: #{e.message}"
+      end
+
+      # Process the return value of a node: Hash, Command, Array<Send>, or nil
+      def process_node_result(result, state, node_name)
+        case result
+        when Command
+          state = apply_state_update(state, result.update) if result.update.is_a?(Hash) && result.update.any?
+          resolved = result.goto
+          [state, resolved]
+        when Array
+          # Array of Send objects for fan-out
+          if result.all? { |r| r.is_a?(Send) }
+            result.each do |send_obj|
+              target_fn = @graph.nodes[send_obj.node]
+              raise GraphExecutionError, "Send target '#{send_obj.node}' not found" unless target_fn
+
+              merged = state.merge(send_obj.state.transform_keys(&:to_sym))
+              update = execute_node(target_fn, merged)
+              state = apply_state_update(state, update) if update.is_a?(Hash)
+            end
+            # After all sends, resolve next from the originating node
+            resolved = resolve_next_nodes(node_name, state)
+            [state, resolved]
+          else
+            # Regular array return — not a Send array, ignore
+            [state, resolve_next_nodes(node_name, state)]
+          end
+        when Hash
+          state = apply_state_update(state, result)
+          resolved = resolve_next_nodes(node_name, state)
+          [state, resolved]
+        else
+          [state, resolve_next_nodes(node_name, state)]
+        end
       end
 
       def build_interrupt_result(state, node_name, step, kind, value = nil)
