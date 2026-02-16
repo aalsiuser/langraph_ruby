@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.description = "A Ruby implementation of graph-based LLM agent orchestration " \
                      "with typed state, conditional routing, cycles, and streaming. " \
                      "Inspired by LangGraph."
-  spec.homepage = "https://github.com/vamsi/langraph_ruby"
+  spec.homepage = "https://github.com/aalsiuser/langraph_ruby"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1.0"
 
