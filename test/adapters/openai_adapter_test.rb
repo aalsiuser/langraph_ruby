@@ -123,4 +123,73 @@ class OpenAiAdapterTest < Minitest::Test
 
     assert_equal "Helpful response", result.content
   end
+
+  # Feeds pre-canned streaming chunks to the stream: proc, like ruby-openai does.
+  class MockStreamingClient
+    def initialize(chunks)
+      @chunks = chunks
+    end
+
+    def chat(parameters:)
+      stream = parameters[:stream]
+      @chunks.each { |chunk| stream.call(chunk) }
+      nil
+    end
+  end
+
+  def test_streaming_content_tokens
+    chunks = [
+      { "model" => "gpt-4o", "choices" => [{ "delta" => { "content" => "Hel" } }] },
+      { "choices" => [{ "delta" => { "content" => "lo!" } }] },
+      { "choices" => [{ "delta" => {}, "finish_reason" => "stop" }] },
+      { "choices" => [], "usage" => { "total_tokens" => 7 } }
+    ]
+    adapter = LangraphRuby::Adapters::OpenAiAdapter.new(client: MockStreamingClient.new(chunks))
+
+    tokens = []
+    result = adapter.chat(
+      messages: [LangraphRuby::Messages::HumanMessage.new(content: "Hi")],
+      on_token: ->(t) { tokens << t }
+    )
+
+    assert_equal %w[Hel lo!], tokens
+    assert_equal "Hello!", result.content
+    refute result.has_tool_calls?
+    assert_equal "stop", result.metadata[:finish_reason]
+    assert_equal({ "total_tokens" => 7 }, result.metadata[:usage])
+  end
+
+  def test_streaming_stitches_fragmented_tool_calls
+    chunks = [
+      { "choices" => [{ "delta" => { "tool_calls" => [{ "index" => 0, "id" => "call_1",
+                                                        "function" => { "name" => "search", "arguments" => "{\"q\":" } }] } }] },
+      { "choices" => [{ "delta" => { "tool_calls" => [{ "index" => 0, "function" => { "arguments" => "\"milk\"}" } }] } }] },
+      { "choices" => [{ "delta" => {}, "finish_reason" => "tool_calls" }] }
+    ]
+    adapter = LangraphRuby::Adapters::OpenAiAdapter.new(client: MockStreamingClient.new(chunks))
+
+    tokens = []
+    result = adapter.chat(
+      messages: [LangraphRuby::Messages::HumanMessage.new(content: "cheap milk?")],
+      on_token: ->(t) { tokens << t }
+    )
+
+    assert_empty tokens
+    assert result.has_tool_calls?
+    tc = result.tool_calls.first
+    assert_equal "search", tc.name
+    assert_equal({ "q" => "milk" }, tc.args)
+  end
+
+  def test_non_streaming_unaffected_when_no_on_token
+    response = {
+      "choices" => [{ "message" => { "content" => "plain", "role" => "assistant" }, "finish_reason" => "stop" }],
+      "model" => "gpt-4o"
+    }
+    adapter = LangraphRuby::Adapters::OpenAiAdapter.new(client: MockOpenAiClient.new([response]))
+
+    result = adapter.chat(messages: [LangraphRuby::Messages::HumanMessage.new(content: "Hi")])
+
+    assert_equal "plain", result.content
+  end
 end
