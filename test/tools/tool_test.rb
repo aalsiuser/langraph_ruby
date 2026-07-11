@@ -58,4 +58,28 @@ class ToolTest < Minitest::Test
     assert_includes schema[:parameters][:required], "query"
     refute_includes schema[:parameters][:required], "limit"
   end
+
+  def test_to_schema_strips_required_marker_from_properties
+    tool = LangraphRuby::Tools::Tool.new(
+      name: "search",
+      description: "Search the web",
+      parameters: { query: { type: "string", description: "Search query", required: true } }
+    ) { |query:| "results" }
+
+    properties = tool.to_schema[:parameters][:properties]
+
+    # `required: true` is the DSL marker — strict JSON Schema validators
+    # (OpenAI) reject it inside a property ("True is not of type 'array'").
+    refute_includes properties[:query].keys, :required
+    assert_equal "string", properties[:query][:type]
+  end
+
+  def test_to_schema_does_not_mutate_tool_parameters
+    params = { query: { type: "string", required: true } }
+    tool = LangraphRuby::Tools::Tool.new(name: "t", description: "d", parameters: params) { |query:| "x" }
+
+    tool.to_schema
+
+    assert params[:query][:required], "to_schema must not mutate the tool's own parameters"
+  end
 end

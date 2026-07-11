@@ -28,7 +28,12 @@ module LangraphRuby
           description: @description,
           parameters: {
             type: "object",
-            properties: @parameters,
+            # :required is this DSL's per-property marker, not a JSON Schema
+            # property keyword — leaking it into properties makes strict
+            # validators (e.g. OpenAI) reject the schema with
+            # "True is not of type 'array'". Emit it only as the object-level
+            # required array.
+            properties: @parameters.transform_values { |v| v.except(:required) },
             required: @parameters.select { |_, v| v[:required] }.keys.map(&:to_s)
           }
         }
