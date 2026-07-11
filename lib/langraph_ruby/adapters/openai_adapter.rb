@@ -9,6 +9,10 @@ module LangraphRuby
         @client = client || create_client(api_key)
       end
 
+      # @param on_token [#call, nil] when given (via config), the response is
+      #   streamed and each content-delta string is yielded to it as it arrives.
+      #   The assembled AIMessage (with tool_calls and usage) is still returned,
+      #   so callers get the same result whether or not they stream.
       def chat(messages:, tools: [], **config)
         formatted = format_messages(messages)
 
@@ -20,11 +24,69 @@ module LangraphRuby
         params[:temperature] = config[:temperature] if config[:temperature]
         params[:max_tokens] = config[:max_tokens] if config[:max_tokens]
 
+        return stream_chat(params, config[:on_token]) if config[:on_token]
+
         response = @client.chat(parameters: params)
         parse_response(response)
       end
 
       private
+
+      # Streams the completion, forwarding content tokens to on_token, and
+      # rebuilds the full AIMessage (content + tool_calls + usage) from the
+      # accumulated chunks. Tool-call arguments arrive fragmented across chunks
+      # and are stitched back together by index.
+      def stream_chat(params, on_token)
+        content = +""
+        tool_fragments = {}
+        meta = {}
+
+        params[:stream] = proc do |chunk, _bytesize = nil|
+          if (choice = chunk.dig("choices", 0))
+            delta = choice["delta"] || {}
+
+            if (text = delta["content"])
+              content << text
+              on_token.call(text)
+            end
+
+            Array(delta["tool_calls"]).each do |tc|
+              frag = (tool_fragments[tc["index"]] ||= { "id" => nil, "name" => nil, "args" => +"" })
+              frag["id"] ||= tc["id"]
+              if (fn = tc["function"])
+                frag["name"] ||= fn["name"]
+                frag["args"] << fn["arguments"].to_s if fn["arguments"]
+              end
+            end
+
+            meta[:finish_reason] = choice["finish_reason"] if choice["finish_reason"]
+          end
+
+          meta[:usage] = chunk["usage"] if chunk["usage"]
+          meta[:model] ||= chunk["model"]
+        end
+        params[:stream_options] = { include_usage: true }
+
+        @client.chat(parameters: params)
+
+        tool_calls = tool_fragments.values.map do |frag|
+          args = frag["args"].to_s
+          parsed = args.empty? ? {} : safe_parse(args)
+          Messages::ToolCall.new(id: frag["id"], name: frag["name"], args: parsed)
+        end
+
+        Messages::AIMessage.new(
+          content: content,
+          tool_calls: tool_calls,
+          metadata: { model: meta[:model], finish_reason: meta[:finish_reason], usage: meta[:usage] }
+        )
+      end
+
+      def safe_parse(json)
+        JSON.parse(json)
+      rescue JSON::ParserError
+        {}
+      end
 
       def create_client(api_key)
         require "openai"
