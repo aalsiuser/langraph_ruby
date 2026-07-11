@@ -7,15 +7,17 @@ module LangraphRuby
 
       attr_reader :graph
 
-      def initialize(graph:, checkpointer: nil, interrupt_before: [], interrupt_after: [])
+      def initialize(graph:, checkpointer: nil, interrupt_before: [], interrupt_after: [],
+                     default_max_steps: DEFAULT_MAX_STEPS)
         @graph = graph
         @checkpointer = checkpointer
         @interrupt_before = interrupt_before
         @interrupt_after = interrupt_after
+        @default_max_steps = default_max_steps
       end
 
       def invoke(input, config: {})
-        max_steps = config.fetch(:max_steps, DEFAULT_MAX_STEPS)
+        max_steps = config.fetch(:max_steps, @default_max_steps)
         thread_id = config[:thread_id]
         resume_value = config[:resume]
         checkpoint_id = config[:checkpoint_id]
@@ -76,7 +78,7 @@ module LangraphRuby
       end
 
       def stream(input, config: {}, stream_mode: :values)
-        max_steps = config.fetch(:max_steps, DEFAULT_MAX_STEPS)
+        max_steps = config.fetch(:max_steps, @default_max_steps)
         thread_id = config[:thread_id]
 
         Enumerator.new do |yielder|

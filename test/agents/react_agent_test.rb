@@ -219,4 +219,94 @@ class ReactAgentTest < Minitest::Test
     assert_equal({ source: "test" }, result[:metadata])
     assert_equal 2, result[:messages].length
   end
+
+  def test_model_config_forwarded_to_adapter
+    config_seen = nil
+    adapter = MockAdapter.new([
+      LangraphRuby::Messages::AIMessage.new(content: "Done")
+    ])
+    adapter.define_singleton_method(:chat) do |messages:, tools: [], **config|
+      config_seen = config
+      super(messages: messages, tools: tools, **config)
+    end
+
+    agent = LangraphRuby::Agents::ReactAgent.create(
+      adapter: adapter,
+      tools: [@search_tool],
+      model_config: { model: "gpt-4o", temperature: 0.2 }
+    )
+
+    agent.invoke({
+      messages: [LangraphRuby::Messages::HumanMessage.new(content: "Hi")]
+    })
+
+    assert_equal({ model: "gpt-4o", temperature: 0.2 }, config_seen)
+  end
+
+  def test_model_config_defaults_to_empty
+    config_seen = nil
+    adapter = MockAdapter.new([
+      LangraphRuby::Messages::AIMessage.new(content: "Done")
+    ])
+    adapter.define_singleton_method(:chat) do |messages:, tools: [], **config|
+      config_seen = config
+      super(messages: messages, tools: tools, **config)
+    end
+
+    agent = LangraphRuby::Agents::ReactAgent.create(adapter: adapter, tools: [@search_tool])
+
+    agent.invoke({
+      messages: [LangraphRuby::Messages::HumanMessage.new(content: "Hi")]
+    })
+
+    assert_equal({}, config_seen)
+  end
+
+  def test_max_steps_from_create_is_enforced
+    # Adapter always requests another tool call -> infinite loop without a cap.
+    looping_response = lambda do
+      LangraphRuby::Messages::AIMessage.new(
+        content: "",
+        tool_calls: [LangraphRuby::Messages::ToolCall.new(name: "search", args: { query: "again" })]
+      )
+    end
+    adapter = MockAdapter.new(Array.new(50) { looping_response.call })
+
+    agent = LangraphRuby::Agents::ReactAgent.create(
+      adapter: adapter,
+      tools: [@search_tool],
+      max_steps: 4
+    )
+
+    error = assert_raises(LangraphRuby::MaxStepsReachedError) do
+      agent.invoke({
+        messages: [LangraphRuby::Messages::HumanMessage.new(content: "Loop forever")]
+      })
+    end
+    assert_match(/4 steps/, error.message)
+  end
+
+  def test_invoke_config_overrides_create_max_steps
+    adapter = MockAdapter.new([
+      LangraphRuby::Messages::AIMessage.new(
+        content: "",
+        tool_calls: [LangraphRuby::Messages::ToolCall.new(name: "search", args: { query: "x" })]
+      ),
+      LangraphRuby::Messages::AIMessage.new(content: "Found it")
+    ])
+
+    agent = LangraphRuby::Agents::ReactAgent.create(
+      adapter: adapter,
+      tools: [@search_tool],
+      max_steps: 1
+    )
+
+    # create's cap (1) would fail this two-round run; the invoke override wins.
+    result = agent.invoke(
+      { messages: [LangraphRuby::Messages::HumanMessage.new(content: "Hi")] },
+      config: { max_steps: 10 }
+    )
+
+    assert_equal "Found it", result[:messages].last.content
+  end
 end
