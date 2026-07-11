@@ -12,12 +12,16 @@ module LangraphRuby
       # @param adapter [Adapters::BaseAdapter] LLM adapter instance
       # @param tools [Array<Tools::Tool>] Available tools
       # @param system_prompt [String, nil] System instructions for the agent
-      # @param max_steps [Integer] Maximum execution steps (default 25)
+      # @param max_steps [Integer] Maximum execution steps (default 25); becomes the
+      #   compiled graph's default and can still be overridden per-invoke via
+      #   `config: { max_steps: N }`
+      # @param model_config [Hash] Options forwarded to every adapter.chat call
+      #   (e.g. model:, temperature:, max_tokens:)
       # @return [Execution::CompiledGraph]
-      def self.create(adapter:, tools:, system_prompt: nil, max_steps: 25, state_schema: nil)
+      def self.create(adapter:, tools:, system_prompt: nil, max_steps: 25, state_schema: nil,
+                      model_config: {})
         schema = state_schema || AgentState
         tool_node = Tools::ToolNode.new(tools: tools, handle_errors: true)
-        model_config = {}
 
         agent_node = ->(state) {
           msgs = state[:messages].dup
@@ -45,7 +49,7 @@ module LangraphRuby
         graph.add_conditional_edges(:agent, should_continue)
         graph.add_edge(:tools, :agent)
 
-        graph.compile
+        graph.compile(default_max_steps: max_steps)
       end
     end
   end

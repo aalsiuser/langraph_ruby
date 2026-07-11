@@ -57,13 +57,15 @@ module LangraphRuby
         self
       end
 
-      def compile(checkpointer: nil, interrupt_before: [], interrupt_after: [])
+      def compile(checkpointer: nil, interrupt_before: [], interrupt_after: [],
+                  default_max_steps: Execution::CompiledGraph::DEFAULT_MAX_STEPS)
         validate_graph!
         Execution::CompiledGraph.new(
           graph: self,
           checkpointer: checkpointer,
           interrupt_before: interrupt_before.map(&:to_sym),
-          interrupt_after: interrupt_after.map(&:to_sym)
+          interrupt_after: interrupt_after.map(&:to_sym),
+          default_max_steps: default_max_steps
         )
       end
 
